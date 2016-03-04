@@ -227,7 +227,7 @@ impl BSPReader {
     pub fn read_textures(&mut self, direntries: &Direntries) -> Vec<Texture> {
         self.read_list(&direntries.textures, 64 + 4 + 4, |r| {
             Texture {
-                name: r.read_string(64),
+                name: r.read_string(64).replace("\u{0}", "").to_owned(),
                 flags: r.read_int(),
                 contents: r.read_int(),
             }

@@ -5,12 +5,14 @@ extern crate byteorder;
 extern crate glium;
 extern crate cgmath;
 extern crate time;
+extern crate image;
 
 use bsp_reader::BSPReader;
 use glium::{DisplayBuild, Surface};
 use std::fs::File;
 use std::io::Read;
 use std::collections::HashSet;
+use std::collections::HashMap;
 use glium::glutin::*;
 use cgmath::*;
 
@@ -40,11 +42,46 @@ fn main() {
     let faces = bsp.read_faces(&header.direntries);
     let vertexes = bsp.read_vertexes(&header.direntries);
     let meshverts = bsp.read_meshverts(&header.direntries);
+    let textures = bsp.read_textures(&header.direntries);
 
-    println!("{:#?}", models);
+    //println!("{:#?}", textures);
     let model = &models[0];
 
+    let mut loaded_textures = HashMap::new();
+    for i in 0..textures.len() {
+        let texture = &textures[i];
+        if texture.name.starts_with("textures/") || texture.name.starts_with("models/") {
+            let mut path = format!("data/{}.jpg", texture.name);
+            let jpg = match File::open(&path) {
+                Ok(_) => true,
+                Err(_) => {
+                    path = format!("data/{}.tga", texture.name);
+                    false
+                }
+            };
+            let image_format = if jpg {
+                image::ImageFormat::JPEG
+            } else {
+                image::ImageFormat::TGA
+            };
+
+            match File::open(&path) {
+                Ok(file) => {
+                    let image = image::load(file, image_format).unwrap().to_rgba();
+                    let image_dimensions = image.dimensions();
+                    let image = glium::texture::RawImage2d::from_raw_rgba_reversed(image.into_raw(), image_dimensions);
+                    loaded_textures.insert(i, glium::texture::Texture2d::new(&display, image));
+                    println!("Opened {}", &path);
+                }
+                Err(_) => {
+                    println!("Couldn't open {}", &path);
+                }
+            }
+        }
+    }
+
     let model_faces = &faces[model.face as usize..(model.face + model.n_faces) as usize];
+    println!("Model faces: {}", model_faces.len());
     let mut vertex_buffer: Vec<Vertex> = Vec::new();
     for vertex in vertexes {
         vertex_buffer.push(Vertex {
@@ -57,26 +94,26 @@ fn main() {
         });
     }
     let vertex_buffer = glium::VertexBuffer::new(&display, &vertex_buffer).unwrap();
-    let mut index_buffer: Vec<u32> = Vec::new();
-
-    for face in model_faces {
+    let mut face_indices : HashMap<usize, glium::index::IndexBuffer<u32>> = HashMap::new();
+    for i in 0..model_faces.len() {
+        let face = &model_faces[i];
         if face.f_type == 1 || face.f_type == 3 {
+            let mut index_buffer: Vec<u32> = Vec::new();
+
             for relative_vertex_index in
                 &meshverts[face.meshvert as usize..(face.meshvert + face.n_meshverts) as usize] {
                 index_buffer.push((relative_vertex_index + face.vertex) as u32);
             }
+
+            let index_buffer : glium::index::IndexBuffer<u32> = glium::index::IndexBuffer::new(&display,
+                                                              glium::index::PrimitiveType::TrianglesList,
+                                                              &index_buffer).unwrap();
+
+            face_indices.insert(i, index_buffer);
         }
     }
-
-    let index_buffer = glium::index::IndexBuffer::new(&display,
-                                                      glium::index::PrimitiveType::TrianglesList,
-                                                      &index_buffer)
-                           .unwrap();
-
     let vertex_shader_src = read_shader("src/shaders/world.vert");
-
     let fragment_shader_src = read_shader("src/shaders/world.frag");
-
     let program = glium::Program::from_source(&display,
                                               &vertex_shader_src,
                                               &fragment_shader_src,
@@ -134,12 +171,18 @@ fn main() {
             ..Default::default()
         };
 
-        target.draw(&vertex_buffer,
-                    &index_buffer,
-                    &program,
-                    &uniform!{model: model_m, view: view_m, perspective: perspective_m},
-                    &params)
-              .unwrap();
+        for i in 0..model_faces.len() {
+            let face = &model_faces[i];
+            if face.f_type == 1 || face.f_type == 3 {
+                let index_buffer = face_indices.get(&i).unwrap();
+                target.draw(&vertex_buffer,
+                            index_buffer,
+                            &program,
+                            &uniform!{model: model_m, view: view_m, perspective: perspective_m},
+                            &params)
+                      .unwrap();
+            }
+        }
 
         target.finish().unwrap();
 
